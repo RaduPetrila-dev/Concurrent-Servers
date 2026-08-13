@@ -1,0 +1,51 @@
+# Build output
+build/
+*.o
+*.d
+*.a
+*.so
+*.out
+a.out
+
+# Binaries built in place by mistake
+sequential
+threaded
+threadpool
+epoll
+select
+loadgen
+
+# Debug and profiling
+core
+core.*
+vgcore.*
+perf.data
+perf.data.old
+callgrind.out.*
+massif.out.*
+*.gcda
+*.gcno
+*.gcov
+
+# Tooling
+compile_commands.json
+.cache/
+.clangd/
+
+# Python (benchmark plotting)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
