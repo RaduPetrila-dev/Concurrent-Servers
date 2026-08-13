@@ -23,7 +23,7 @@ COMMON_SRC  := $(SRC_DIR)/utils.c
 COMMON_OBJ  := $(BUILD_DIR)/utils.o
 
 ALL_SRCS  := $(filter-out $(COMMON_SRC),$(wildcard $(SRC_DIR)/*.c))
-UV_SRCS   := $(filter $(SRC_DIR)/uv-%.c,$(ALL_SRCS))
+UV_SRCS   := $(filter $(SRC_DIR)/uv_%.c,$(ALL_SRCS))
 CORE_SRCS := $(filter-out $(UV_SRCS),$(ALL_SRCS))
 
 CORE_BINS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%,$(CORE_SRCS))
@@ -46,7 +46,7 @@ $(COMMON_OBJ): $(COMMON_SRC) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # More specific than the generic rule below, so make picks it for uv-* sources.
-$(BUILD_DIR)/uv-%: $(SRC_DIR)/uv-%.c $(COMMON_OBJ) | $(BUILD_DIR)
+$(BUILD_DIR)/uv_%: $(SRC_DIR)/uv_%.c $(COMMON_OBJ) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< $(COMMON_OBJ) $(LDFLAGS) $(UV_LIBS) -o $@
 
 $(BUILD_DIR)/%: $(SRC_DIR)/%.c $(COMMON_OBJ) | $(BUILD_DIR)
