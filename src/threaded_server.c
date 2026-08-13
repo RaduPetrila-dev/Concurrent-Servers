@@ -39,7 +39,7 @@ void serve_connection(int sockfd) {
           state = IN_MSG;
         }
         break;
-      case IN_MSG;
+      case IN_MSG:
         if (buf[i] == '$') {
           state = WAIT_FOR_MSG;
         } else  {
