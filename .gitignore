@@ -8,11 +8,15 @@ build/
 a.out
 
 # Binaries built in place by mistake
-sequential
-threaded
-threadpool
-epoll
-select
+sequential_server
+threaded_server
+threadpool_server
+epoll_server
+select_server
+uv_server
+blocking_listener
+nonblocking_listener
+threadspammer
 loadgen
 
 # Debug and profiling
