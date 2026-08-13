@@ -12,7 +12,9 @@
 
 #include "utils.h"
 
-typedef struct { int sockfd; } thread_config_t;
+typedef struct {
+  int sockfd;
+} thread_config_t;
 
 typedef enum { WAIT_FOR_MSG, IN_MSG } ProcessingState;
 
@@ -23,7 +25,7 @@ void serve_connection(int sockfd) {
 
   ProcessingState state = WAIT_FOR_MSG;
 
-  while(1) {
+  while (1) {
     uint8_t buf[1024];
     int len = recv(sockfd, buf, sizeof buf, 0);
     if (len < 0) {
@@ -42,7 +44,7 @@ void serve_connection(int sockfd) {
       case IN_MSG:
         if (buf[i] == '$') {
           state = WAIT_FOR_MSG;
-        } else  {
+        } else {
           buf[i] += 1;
           if (send(sockfd, &buf[i], 1, 0) < 1) {
             perror("send error");
@@ -68,7 +70,7 @@ void* server_thread(void* arg) {
          sockfd);
   serve_connection(sockfd);
   printf("Thread %lu done\n", id);
-  return 0;  
+  return 0;
 }
 
 int main(int argc, char** argv) {
