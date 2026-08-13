@@ -1,0 +1,56 @@
+---
+# Style for the C sources in src/. Chosen to match the existing code so that
+# running `make format` reformats nothing and produces no diff noise.
+#
+# Google base, with two deliberate departures:
+#   IndentCaseLabels: false     switch cases sit level with the switch
+#   IncludeCategories           system headers first, local headers last
+
+Language: Cpp
+BasedOnStyle: Google
+
+ColumnLimit: 80
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+ContinuationIndentWidth: 4
+
+# char** argv, not char **argv. DerivePointerAlignment must be off or Google
+# style guesses per file and the two settings fight each other.
+DerivePointerAlignment: false
+PointerAlignment: Left
+
+BreakBeforeBraces: Attach
+IndentCaseLabels: false
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+
+SpaceBeforeParens: ControlStatements
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+Cpp11BracedListStyle: true
+
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignEscapedNewlines: Left
+AlignTrailingComments: true
+
+# Keep <system> headers above "local" ones, which is the order already used.
+SortIncludes: true
+IncludeBlocks: Preserve
+IncludeCategories:
+  - Regex: '^<.*\.h>'
+    Priority: 1
+  - Regex: '^<.*>'
+    Priority: 2
+  - Regex: '^".*"'
+    Priority: 3
+
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+ReflowComments: true
+InsertNewlineAtEOF: true
