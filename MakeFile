@@ -1,68 +1,99 @@
-# Makefile for the C code in async-socket-server.
+# Concurrent servers in C.
+#
+# Every .c in src/ except utils.c is a standalone server, linked against utils.o.
+# Sources named uv-*.c link against libuv and are built only by `make uv`, so a
+# missing libuv never blocks the default build.
+#
+# Servers follow Eli Bendersky's "Programming concurrent servers" series.
+# Build system, benchmarks, and extensions are mine.
 
-CC = gcc
-CCFLAGS = -std=gnu99 -Wall -O3 -g -DNDEBUG -pthread
-LDFLAGS = -lpthread -pthread
+CC      ?= gcc
+CFLAGS  ?= -std=gnu11 -Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes
+CFLAGS  += -pthread -MMD -MP
+LDFLAGS += -pthread
 
-# It's possible to compile uv-server after installing libuv. The full
-# instructions for installation I used (including `make install`) are from:
-# https://github.com/libuv/libuv/blob/master/README.md.
-# libuv compiles into a shared library which is placed alongside the .a in the
-# installation directory.
-LDLIBUV = -luv -Wl,-rpath=/usr/local/lib
+# libuv installs a shared library alongside the .a, so the rpath lets the binary
+# find it at run time without setting LD_LIBRARY_PATH.
+UV_LIBS := -luv -Wl,-rpath=/usr/local/lib
 
-EXECUTABLES = \
-	sequential-server \
-	select-server \
-	epoll-server \
-	uv-server \
-	uv-timer-sleep-demo \
-	uv-timer-work-demo \
-	uv-isprime-server \
-	threadspammer \
-	blocking-listener \
-	nonblocking-listener \
-	threaded-server
+SRC_DIR   := src
+BUILD_DIR := build
 
-all: $(EXECUTABLES)
+COMMON_SRC  := $(SRC_DIR)/utils.c
+COMMON_OBJ  := $(BUILD_DIR)/utils.o
 
-sequential-server: utils.c sequential-server.c
-	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
+ALL_SRCS  := $(filter-out $(COMMON_SRC),$(wildcard $(SRC_DIR)/*.c))
+UV_SRCS   := $(filter $(SRC_DIR)/uv-%.c,$(ALL_SRCS))
+CORE_SRCS := $(filter-out $(UV_SRCS),$(ALL_SRCS))
 
-select-server: utils.c select-server.c
-	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
+CORE_BINS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%,$(CORE_SRCS))
+UV_BINS   := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%,$(UV_SRCS))
+DEPS      := $(CORE_BINS:=.d) $(UV_BINS:=.d) $(COMMON_OBJ:.o=.d)
 
-threaded-server: utils.c threaded-server.c
-	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
+.PHONY: all
+all: $(CORE_BINS)
 
-epoll-server: utils.c epoll-server.c
-	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
+.PHONY: uv
+uv: $(UV_BINS)
 
-uv-server: utils.c uv-server.c
-	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS) $(LDLIBUV)
+.PHONY: everything
+everything: all uv
 
-uv-timer-sleep-demo: utils.c uv-timer-sleep-demo.c
-	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS) $(LDLIBUV)
+$(BUILD_DIR):
+	@mkdir -p $(BUILD_DIR)
 
-uv-timer-work-demo: utils.c uv-timer-work-demo.c
-	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS) $(LDLIBUV)
+$(COMMON_OBJ): $(COMMON_SRC) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-uv-isprime-server: utils.c uv-isprime-server.c
-	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS) $(LDLIBUV)
+# More specific than the generic rule below, so make picks it for uv-* sources.
+$(BUILD_DIR)/uv-%: $(SRC_DIR)/uv-%.c $(COMMON_OBJ) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $< $(COMMON_OBJ) $(LDFLAGS) $(UV_LIBS) -o $@
 
-threadspammer: threadspammer.c
-	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
+$(BUILD_DIR)/%: $(SRC_DIR)/%.c $(COMMON_OBJ) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $< $(COMMON_OBJ) $(LDFLAGS) -o $@
 
-blocking-listener: utils.c blocking-listener.c
-	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
+# Warnings become errors. CI runs this so a warning cannot reach main.
+.PHONY: strict
+strict:
+	$(MAKE) clean
+	$(MAKE) all CFLAGS="$(CFLAGS) -Werror"
 
-nonblocking-listener: utils.c nonblocking-listener.c
-	$(CC) $(CCFLAGS) $^ -o $@ $(LDFLAGS)
+# ASan and UBSan. Slow, and it catches the memory bugs a socket server hides
+# until it is under load.
+.PHONY: debug
+debug:
+	$(MAKE) clean
+	$(MAKE) all \
+		CFLAGS="$(CFLAGS) -g3 -O0 -fno-omit-frame-pointer -fsanitize=address,undefined" \
+		LDFLAGS="$(LDFLAGS) -fsanitize=address,undefined"
 
-.PHONY: clean format
+# Benchmark numbers come from this target and no other.
+.PHONY: release
+release:
+	$(MAKE) clean
+	$(MAKE) all CFLAGS="$(CFLAGS) -O2 -DNDEBUG"
 
-clean:
-	rm -f $(EXECUTABLES) *.o
-
+.PHONY: format
 format:
-	clang-format -style=file -i *.c *.h
+	clang-format -style=file -i $(SRC_DIR)/*.c $(SRC_DIR)/*.h
+
+.PHONY: clean
+clean:
+	@rm -rf $(BUILD_DIR)
+
+.PHONY: help
+help:
+	@echo "Targets:"
+	@echo "  all         build the servers into $(BUILD_DIR)/ (default)"
+	@echo "  uv          build the libuv servers, needs libuv installed"
+	@echo "  everything  all + uv"
+	@echo "  strict      rebuild with -Werror"
+	@echo "  debug       rebuild with ASan and UBSan, no optimisation"
+	@echo "  release     rebuild with -O2, use this for benchmarks"
+	@echo "  format      run clang-format over src/"
+	@echo "  clean       remove $(BUILD_DIR)/"
+	@echo ""
+	@echo "Core servers:  $(notdir $(CORE_BINS))"
+	@echo "libuv servers: $(notdir $(UV_BINS))"
+
+-include $(DEPS)
