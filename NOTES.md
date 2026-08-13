@@ -38,6 +38,12 @@ everywhere.
 `recv` returns `ssize_t`. Harmless at a 1024-byte buffer, wrong in general, and a
 narrowing conversion a reviewer will flag.
 
+**[bug] The tutorial builds with `-DNDEBUG`, so every assert is dead code.**
+Two separate defects in `select_server.c` are invisible under the tutorial's own
+Makefile for this reason: an undeclared identifier and a missing bounds check.
+Build without `NDEBUG` by default, keep it for the `release` target only, and
+treat any assert that guards a memory write as a bug rather than a check.
+
 **[perf] One `send` syscall per byte.**
 `send(sockfd, &buf[i], 1, 0)` inside the inner loop means a syscall and a context
 switch for every character. Buffer the transformed bytes and send once per `recv`.
@@ -83,12 +89,85 @@ able to explain out loud.
 
 ---
 
+## select_server.c
+
+**[bug] `MAXFDs` does not exist.**
+The macro is `#define MAXFDS 1000`, but three asserts spell it `MAXFDs` with a
+lowercase s. Confirmed: `gcc -Wall` rejects it with *'MAXFDs' undeclared*, and
+`gcc -DNDEBUG` compiles it clean, because `assert` expands to nothing and the
+identifier is never evaluated. The tutorial Makefile passes `-DNDEBUG`, which is
+why this was never caught. Fix the spelling in all three places.
+
+**[bug] Bounds checking lives inside an `assert`.**
+`assert(peerstate->sendbuf_end < SENDBUF_SIZE)` guards the write on the next
+line. Under `-DNDEBUG` that guard disappears and the write past the end of a
+1024-byte buffer happens silently, corrupting `sendbuf_end` and `sendptr` which
+sit immediately after it in the struct. Bounds enforcement has to be a real `if`
+that returns an error. Asserts document invariants, they do not enforce them.
+
+**[bug] Use of a closed fd in the same loop iteration.**
+Inside the `for (fd ...)` loop, the read branch can `close(fd)` when the handler
+returns NORW. The write branch then runs on the same fd in the same iteration,
+and if that fd was set in `writefds` it calls `on_peer_ready_send` on a closed
+descriptor. `send` returns EBADF and `perror_die` takes the process down. Skip
+the write check with `continue` after closing, or track closure in a flag.
+
+**[bug] `perror_die` on `recv` and `send` failure.**
+Same fatal policy as the other servers. One misbehaving peer terminates every
+connection on the process.
+
+**[style] `assert(0 && "can't reach here")` for the INITIAL_ACK case.**
+Under `-DNDEBUG` this becomes a silent fall-through rather than a crash. If the
+state is genuinely unreachable, close the connection and log it instead.
+
+**[style] `int` used for `recv` and `send` return values.**
+Both return `ssize_t`.
+
+**[design] `FD_SETSIZE` caps the server at roughly 1000 connections.**
+Documented in the source and inherent to `select`. Keep it, and make the
+benchmark show the wall.
+
+**[design] `global_state[MAXFDS]` is a fixed ~1MB array indexed by fd.**
+Simple and fast, and it means memory is allocated for peers that never connect.
+Worth contrasting with a per-connection allocation in the write-up.
+
+---
+
+## blocking_listener.c and nonblocking_listener.c
+
+**[bug] `uint8_t` used without including `<stdint.h>`.**
+Both files declare `uint8_t buf[1024]` and neither includes `<stdint.h>`. This
+compiles only because `utils.h` happens to pull it in. Include what you use.
+
+**[style] `const char** argv` here, `char** argv` in the servers.**
+Pick one and apply it everywhere. The standard form is `char** argv`.
+
+**[style] `atoi` with no validation.**
+A non-numeric argument silently becomes port 0. `strtol` with error checking is
+two extra lines and is worth it in a file whose whole purpose is teaching.
+
+**[design] Both handle exactly one connection, then exit.**
+Correct. These are demonstrations of blocking versus non-blocking behaviour, not
+servers. Leave them alone and say so in the README so a reader does not mistake
+them for models under test.
+
+**[design] The non-blocking listener busy-polls with a 200ms sleep.**
+This is the point: it shows the cost of polling without an event notification
+mechanism, and motivates `select`. Keep it and reference it when explaining why
+`select_server.c` exists.
+
+---
+
 ## Repo hygiene
 
-- [ ] `.gitignore` for objects, binaries, and build output
-- [ ] `Makefile` so the repo builds from clone with one command
+- [x] `.gitignore` for objects, binaries, and build output
+- [x] `Makefile` so the repo builds from clone with one command
+- [x] `.clang-format` matching the existing style
+- [x] `utils.c` and `utils.h` tracked in git
 - [ ] GitHub Actions workflow building every server on push
-- [ ] Repo description rewritten to say what the code does, not how it was learned
+- [x] Repo description rewritten to say what the code does, not how it was learned
+- [x] Rename `Notes.md` to `NOTES.md` to match README and LICENSE
+- [x] Move the Python thread pool files out of `src/` so the language bar reads C
 - [ ] Pick one language and say so — the tutorial is C
 
 ---
@@ -102,6 +181,3 @@ The tutorial stops once the models work. The extension is measuring them.
 - Throughput and p50, p90, p99 latency across increasing connection counts
 - Identify the crossover point where each model stops scaling, and why
 - Written account of where each model breaks down and what the numbers showed
-
-Optional, if time allows: an `io_uring` implementation benchmarked against the
-`epoll` one.
