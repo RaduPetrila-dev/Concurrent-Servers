@@ -158,16 +158,66 @@ mechanism, and motivates `select`. Keep it and reference it when explaining why
 
 ---
 
+## epoll_server.c
+
+**[bug] `EPOLLERR` on any peer socket kills the whole server.**
+`perror_die("epoll_wait returned EPOLLERR")` fires for every fd in the ready set
+that has the error flag. A peer sending RST is routine, not exceptional, so a
+single client closing hard takes down every other connection. Close that fd,
+remove it from the epoll set, and carry on. `perror_die` is also misleading
+here, because `EPOLLERR` does not set `errno`, so it prints whatever was left
+over from an earlier call.
+
+**[bug] Bounds check inside an `assert` again.**
+`assert(peerstate->sendbuf_end < SENDBUF_SIZE)` guards the write on the next
+line, and vanishes under `-DNDEBUG`. Same defect as `select_server.c`, same fix:
+make it a real `if` that returns an error.
+
+**[style] `#define MAXFDS 16 * 1024` is unparenthesised.**
+It works everywhere it is currently used because the surrounding operators are
+lower precedence, but `x / MAXFDS` would expand to `x / 16 * 1024`, which is
+`(x / 16) * 1024`. Wrap the whole thing: `#define MAXFDS (16 * 1024)`.
+
+**[style] The EPOLLIN and EPOLLOUT branches are ~25 duplicated lines.**
+Both build a `struct epoll_event`, set flags from the returned `fd_status_t`,
+then either `EPOLL_CTL_DEL` and close, or `EPOLL_CTL_MOD`. Only the handler call
+differs. Pull the tail into a helper taking the fd and the status.
+
+**[style] `int` for `recv` and `send` return values.**
+`ssize_t` in both places, as elsewhere.
+
+**[design] Level-triggered, not edge-triggered.**
+No `EPOLLET` anywhere, so the kernel keeps reporting readiness until the buffer
+is drained. That is the right default and it is why the handlers can return
+after a single `recv`. Worth stating in the README, and worth benchmarking an
+`EPOLLET` variant later.
+
+**[design] `global_state` is 16384 entries of ~1KB, allocated up front.**
+About 16MB of static memory whether one peer connects or none. Same trade as
+`select_server.c` at 16x the scale. Contrast with per-connection allocation in
+the write-up.
+
+**[note] The listener and peer branches are correctly separated.**
+`if (events[i].data.fd == listener_sockfd) { ... } else { ... }`, with the accept
+path handling `EAGAIN` properly and rejecting fds at or above `MAXFDS`. No
+equivalent of the `select_server.c` use-after-close bug, because the peer branch
+uses `else if` on EPOLLOUT rather than a second independent check.
+
+---
+
 ## Repo hygiene
 
 - [x] `.gitignore` for objects, binaries, and build output
 - [x] `Makefile` so the repo builds from clone with one command
 - [x] `.clang-format` matching the existing style
 - [x] `utils.c` and `utils.h` tracked in git
-- [ ] GitHub Actions workflow building every server on push
-- [x] Repo description rewritten to say what the code does, not how it was learned
+- [x] GitHub Actions workflow building every server on push
+- [x] `.devcontainer/devcontainer.json` so clang-format and libuv survive a rebuild
+- [ ] README: currently one heading and nothing else
+- [ ] Repo description rewritten to say what the code does, not how it was learned
 - [x] Rename `Notes.md` to `NOTES.md` to match README and LICENSE
 - [x] Move the Python thread pool files out of `src/` so the language bar reads C
+- [ ] No C thread pool server — `threadpool_server.c` does not exist, only the two Python ones
 - [ ] Pick one language and say so — the tutorial is C
 
 ---
@@ -181,3 +231,6 @@ The tutorial stops once the models work. The extension is measuring them.
 - Throughput and p50, p90, p99 latency across increasing connection counts
 - Identify the crossover point where each model stops scaling, and why
 - Written account of where each model breaks down and what the numbers showed
+
+Optional, if time allows: an `io_uring` implementation benchmarked against the
+`epoll` one.
