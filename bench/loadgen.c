@@ -21,12 +21,12 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <time.h>
@@ -47,11 +47,20 @@ typedef struct {
   int payload_bytes;
 
   // Filled in by the thread.
+  double connect_us;     // TCP handshake only
+  double ack_us;         // wait for the server's '*', i.e. time to first byte
+  int connected;         // 1 if the connection was established
   double* latencies_us;  // one per successful request
   int completed;
   int errors;
   int mismatches;
 } conn_ctx_t;
+
+// Every thread connects, then waits here. The request clock starts only once
+// all of them are through, so connection setup cannot leak into the throughput
+// figure. Without this, an accept-queue overflow adds a whole second of SYN
+// retransmit to wall time and looks like a throughput collapse.
+static pthread_barrier_t start_barrier;
 
 static double now_us(void) {
   struct timespec ts;
@@ -75,12 +84,11 @@ static int connect_with_timeout(int fd, const struct sockaddr* addr,
   }
 
   if (rc < 0) {
-    fd_set wfds;
-    FD_ZERO(&wfds);
-    FD_SET(fd, &wfds);
-    struct timeval tv = {.tv_sec = seconds, .tv_usec = 0};
-
-    rc = select(fd + 1, NULL, &wfds, NULL, &tv);
+    // poll() rather than select(): above 1024 connections the file descriptors
+    // exceed FD_SETSIZE and FD_SET writes off the end of the fd_set. The tool
+    // built to measure select()'s limit must not inherit it.
+    struct pollfd pfd = {.fd = fd, .events = POLLOUT, .revents = 0};
+    rc = poll(&pfd, 1, seconds * 1000);
     if (rc <= 0) {
       errno = (rc == 0) ? ETIMEDOUT : errno;
       return -1;
@@ -177,20 +185,34 @@ static int send_all_fd(int fd, const uint8_t* buf, size_t len) {
 static void* conn_main(void* arg) {
   conn_ctx_t* ctx = (conn_ctx_t*)arg;
 
+  double c0 = now_us();
   int fd = connect_to(ctx->host, ctx->port);
+  ctx->connect_us = now_us() - c0;
+  ctx->connected = (fd >= 0);
+
+  // The barrier sits here, after the TCP handshake and before the server's
+  // ack. It cannot wait for the ack: a thread pool server sends '*' only once a
+  // worker picks the connection up, and a worker is not free until an earlier
+  // client finishes. Waiting for all acks before releasing anyone deadlocks the
+  // run against the server's own queueing.
+  pthread_barrier_wait(&start_barrier);
+
   if (fd < 0) {
     ctx->errors = ctx->messages;
     return NULL;
   }
 
-  // Every server sends '*' on connect. Consume it before timing anything, or
-  // the first request absorbs the handshake.
+  // Time to first byte. For an accept-and-serve-immediately server this is
+  // microseconds; for a queueing server it is however long the connection
+  // waited for a worker, which is the number worth seeing.
+  double a0 = now_us();
   uint8_t ack;
   if (recv_exact(fd, &ack, 1) < 0 || ack != '*') {
     ctx->errors = ctx->messages;
     close(fd);
     return NULL;
   }
+  ctx->ack_us = now_us() - a0;
 
   int n = ctx->payload_bytes;
   uint8_t req[MAX_PAYLOAD + 2];
@@ -288,16 +310,33 @@ int main(int argc, char** argv) {
     }
   }
 
-  double wall_start = now_us();
+  // +1 for this thread, which releases the workers once all have connected.
+  pthread_barrier_init(&start_barrier, NULL, (unsigned)connections + 1);
 
+  double setup_start = now_us();
+  int spawned = 0;
   for (int i = 0; i < connections; i++) {
     if (pthread_create(&threads[i], NULL, conn_main, &ctxs[i]) != 0) {
       fprintf(stderr, "pthread_create failed at connection %d\n", i);
-      connections = i;
       break;
     }
+    spawned++;
   }
-  for (int i = 0; i < connections; i++) {
+
+  if (spawned < connections) {
+    // Threads that never started will never reach the barrier. Lower the count
+    // by waiting once per missing thread so the rest are released.
+    for (int i = spawned; i < connections; i++) {
+      pthread_barrier_wait(&start_barrier);
+    }
+    connections = spawned;
+  }
+
+  pthread_barrier_wait(&start_barrier);
+  double setup_us = now_us() - setup_start;
+  double wall_start = now_us();
+
+  for (int i = 0; i < spawned; i++) {
     pthread_join(threads[i], NULL);
   }
 
@@ -327,7 +366,26 @@ int main(int argc, char** argv) {
     mean /= (double)total;
   }
 
+  int established = 0;
+  double connect_max = 0.0, connect_sum = 0.0, ack_max = 0.0;
+  for (int i = 0; i < connections; i++) {
+    established += ctxs[i].connected;
+    connect_sum += ctxs[i].connect_us;
+    if (ctxs[i].connect_us > connect_max) {
+      connect_max = ctxs[i].connect_us;
+    }
+    if (ctxs[i].ack_us > ack_max) {
+      ack_max = ctxs[i].ack_us;
+    }
+  }
+
   printf("connections    %d\n", connections);
+  printf("established    %d\n", established);
+  printf("setup_ms       %.1f\n", setup_us / 1000.0);
+  printf("connect_mean_us %.1f\n",
+         connections > 0 ? connect_sum / connections : 0.0);
+  printf("connect_max_us %.1f\n", connect_max);
+  printf("ack_max_us     %.1f\n", ack_max);
   printf("requests       %d\n", total);
   printf("errors         %d\n", errors);
   printf("mismatches     %d\n", mismatches);
