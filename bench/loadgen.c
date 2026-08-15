@@ -17,6 +17,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -25,11 +26,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
 #define MAX_PAYLOAD 512
+
+// A connection that never completes must fail rather than stall the whole
+// sweep. Both apply per syscall, not per connection.
+#define CONNECT_TIMEOUT_S 5
+#define IO_TIMEOUT_S 10
 
 typedef struct {
   int id;
@@ -51,6 +59,46 @@ static double now_us(void) {
   return (double)ts.tv_sec * 1e6 + (double)ts.tv_nsec / 1e3;
 }
 
+// connect() with a bounded wait. A blocking connect against a server whose
+// accept queue is full can hang for well over a minute while the kernel retries
+// SYNs, which stalls the entire sweep on one saturated data point.
+static int connect_with_timeout(int fd, const struct sockaddr* addr,
+                                socklen_t addrlen, int seconds) {
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+    return -1;
+  }
+
+  int rc = connect(fd, addr, addrlen);
+  if (rc < 0 && errno != EINPROGRESS) {
+    return -1;
+  }
+
+  if (rc < 0) {
+    fd_set wfds;
+    FD_ZERO(&wfds);
+    FD_SET(fd, &wfds);
+    struct timeval tv = {.tv_sec = seconds, .tv_usec = 0};
+
+    rc = select(fd + 1, NULL, &wfds, NULL, &tv);
+    if (rc <= 0) {
+      errno = (rc == 0) ? ETIMEDOUT : errno;
+      return -1;
+    }
+
+    // select() reporting writable does not mean the connect succeeded.
+    int soerr = 0;
+    socklen_t len = sizeof(soerr);
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &len) < 0 || soerr != 0) {
+      errno = soerr ? soerr : errno;
+      return -1;
+    }
+  }
+
+  // Back to blocking; SO_RCVTIMEO and SO_SNDTIMEO bound the reads and writes.
+  return fcntl(fd, F_SETFL, flags);
+}
+
 static int connect_to(const char* host, const char* port) {
   struct addrinfo hints;
   memset(&hints, 0, sizeof(hints));
@@ -68,7 +116,8 @@ static int connect_to(const char* host, const char* port) {
     if (fd < 0) {
       continue;
     }
-    if (connect(fd, p->ai_addr, p->ai_addrlen) == 0) {
+    if (connect_with_timeout(fd, p->ai_addr, p->ai_addrlen,
+                             CONNECT_TIMEOUT_S) == 0) {
       break;
     }
     close(fd);
@@ -81,6 +130,11 @@ static int connect_to(const char* host, const char* port) {
     // Without this, Nagle batches small writes and every latency number
     // measures the 40ms delayed-ack timer instead of the server.
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+
+    // A server that accepts and then never replies must not hang the sweep.
+    struct timeval tv = {.tv_sec = IO_TIMEOUT_S, .tv_usec = 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
   }
   return fd;
 }
@@ -94,6 +148,7 @@ static int recv_exact(int fd, uint8_t* buf, size_t len) {
       if (errno == EINTR) {
         continue;
       }
+      // EAGAIN here is SO_RCVTIMEO firing: the server went quiet.
       return -1;
     }
     if (n == 0) {
