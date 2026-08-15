@@ -93,9 +93,9 @@ format:
 
 .PHONY: bench
 bench:
-	bash $(BENCH_DIR)/run_bench.sh
+	$(MAKE) release
 	$(BENCH_DIR)/run_bench.sh
-	python3 $(BENCH_DIR)/plot_results.py
+	python3 $(BENCH_DIR)/plot_results.py results/latest
 
 .PHONY: clean
 clean:
