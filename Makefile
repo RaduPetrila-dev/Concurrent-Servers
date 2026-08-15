@@ -93,7 +93,7 @@ format:
 
 .PHONY: bench
 bench:
-	$(MAKE) release
+	bash $(BENCH_DIR)/run_bench.sh
 	$(BENCH_DIR)/run_bench.sh
 	python3 $(BENCH_DIR)/plot_results.py
 
