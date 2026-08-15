@@ -19,6 +19,11 @@ nonblocking_listener
 threadspammer
 loadgen
 
+# Benchmark raw latency dumps. Regenerable from bench/run_bench.sh, and large:
+# one line per request, so a 1024-connection sweep runs to tens of megabytes.
+# summary.csv, environment.txt and the plots are committed.
+results/*/raw/
+
 # Debug and profiling
 core
 core.*
