@@ -1,61 +1,22 @@
 // Sequential socket server - accepting one client at a time.
+//
+// The simplest model, and the baseline every other server is measured against.
+// One client is served to completion before the next is accepted, so a slow
+// peer blocks everybody behind it.
 
-#include <stdint.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "protocol.h"
 #include "utils.h"
-
-typedef enum { WAIT_FOR_MSG, IN_MSG } ProcessingState;
-
-void serve_connection(int sockfd) {
-  if (send(sockfd, "*", 1, 0) < 1) {
-    perror_die("send");
-  }
-
-  ProcessingState state = WAIT_FOR_MSG;
-
-  while (1) {
-    uint8_t buf[1024];
-    int len = recv(sockfd, buf, sizeof buf, 0);
-    if (len < 0) {
-      perror_die("recv");
-    } else if (len == 0) {
-      break;
-    }
-
-    for (int i = 0; i < len; ++i) {
-      switch (state) {
-      case WAIT_FOR_MSG:
-        if (buf[i] == '^') {
-          state = IN_MSG;
-        }
-        break;
-      case IN_MSG:
-        if (buf[i] == '$') {
-          state = WAIT_FOR_MSG;
-        } else {
-          buf[i] += 1;
-          if (send(sockfd, &buf[i], 1, 0) < 1) {
-            perror("send error");
-            close(sockfd);
-            return;
-          }
-        }
-        break;
-      }
-    }
-  }
-
-  close(sockfd);
-}
 
 int main(int argc, char** argv) {
   setvbuf(stdout, NULL, _IONBF, 0);
+  ignore_sigpipe();
 
   int portnum = 9090;
   if (argc >= 2) {
@@ -68,17 +29,19 @@ int main(int argc, char** argv) {
   while (1) {
     struct sockaddr_in peer_addr;
     socklen_t peer_addr_len = sizeof(peer_addr);
-
     int newsockfd =
         accept(sockfd, (struct sockaddr*)&peer_addr, &peer_addr_len);
-
     if (newsockfd < 0) {
-      perror_die("ERROR on accept");
+      if (errno == EINTR || errno == ECONNABORTED) {
+        continue;
+      }
+      perror_die("accept");
     }
 
     report_peer_connected(&peer_addr, peer_addr_len);
-    serve_connection(newsockfd);
-    printf("peer done\n");
+    serve_result_t r = serve_connection(newsockfd);
+    close(newsockfd);
+    printf("peer done (%s)\n", serve_result_str(r));
   }
 
   return 0;
