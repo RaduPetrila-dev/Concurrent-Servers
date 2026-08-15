@@ -15,6 +15,11 @@ MESSAGES="${1:-200}"
 PAYLOAD="${2:-32}"
 CONN_COUNTS=(1 2 4 8 16 32 64 128 256 512 1024)
 
+# Hard ceiling per data point. loadgen has its own per-syscall timeouts; this is
+# the backstop for anything they miss, so one saturated point cannot stall the
+# whole sweep.
+RUN_TIMEOUT="${RUN_TIMEOUT:-180}"
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="$ROOT/build"
 RESULTS="$ROOT/results"
@@ -30,6 +35,33 @@ if [[ ! -x "$BUILD/loadgen" ]]; then
   echo "loadgen not built. Run: make release" >&2
   exit 1
 fi
+
+# Each connection needs an fd on both sides, and the default soft limit is
+# usually 1024, which the top of the sweep exceeds.
+soft_limit="$(ulimit -n)"
+needed=$(( ${CONN_COUNTS[-1]} * 2 + 64 ))
+if [[ "$soft_limit" != "unlimited" && "$soft_limit" -lt "$needed" ]]; then
+  ulimit -n "$needed" 2>/dev/null || true
+  soft_limit="$(ulimit -n)"
+  if [[ "$soft_limit" -lt "$needed" ]]; then
+    echo "warning: fd limit is $soft_limit, want $needed. High connection"
+    echo "         counts will report errors. Raise it with: ulimit -n $needed"
+  fi
+fi
+
+{
+  echo "date         $(date -Iseconds)"
+  echo "kernel       $(uname -sr)"
+  echo "cores        $(nproc)"
+  echo "cpu          $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)"
+  echo "cgroup_cpu   $(cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo unknown)"
+  echo "memory       $(free -h | awk '/^Mem:/ {print $2}')"
+  echo "ulimit_n     $(ulimit -n)"
+  echo "messages     $MESSAGES"
+  echo "payload      $PAYLOAD"
+} > "$RESULTS/environment.txt"
+cat "$RESULTS/environment.txt"
+echo
 
 port=9200
 for server in "${SERVERS[@]}"; do
@@ -51,13 +83,19 @@ for server in "${SERVERS[@]}"; do
     sleep 0.4
 
     raw="$RAW/${server}_${conns}.csv"
-    out="$("$BUILD/loadgen" 127.0.0.1 "$port" "$conns" "$MESSAGES" "$PAYLOAD" "$raw" 2>&1)"
+    out="$(timeout "$RUN_TIMEOUT" "$BUILD/loadgen" 127.0.0.1 "$port" "$conns" \
+             "$MESSAGES" "$PAYLOAD" "$raw" 2>&1)"
     rc=$?
 
     kill "$server_pid" 2>/dev/null
     wait "$server_pid" 2>/dev/null
 
     get() { echo "$out" | awk -v k="$1" '$1==k {print $2}'; }
+
+    if [[ $rc -eq 124 ]]; then
+      echo "$server @ $conns conns: TIMED OUT after ${RUN_TIMEOUT}s, skipping rest of this server"
+      break
+    fi
 
     if [[ -z "$(get requests)" ]]; then
       echo "$server @ $conns conns: FAILED"
