@@ -1,5 +1,10 @@
 {
   "name": "Concurrent-Servers",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
-  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y build-essential clang-format libuv1-dev"
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y build-essential clang-format libuv1-dev python3-matplotlib netcat-openbsd",
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-vscode.cpptools", "xaver.clang-format"]
+    }
+  }
 }
