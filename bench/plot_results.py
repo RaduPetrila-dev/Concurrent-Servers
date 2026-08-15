@@ -19,7 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-RESULTS = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "results"
+RESULTS = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "results" / "latest"
 
 
 def load(path):
