@@ -22,14 +22,18 @@ RUN_TIMEOUT="${RUN_TIMEOUT:-180}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="$ROOT/build"
-RESULTS="$ROOT/results"
+
+# One directory per run, so a second sweep never overwrites the first. The
+# comparison between runs is part of the result.
+RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
+RESULTS="$ROOT/results/$RUN_ID"
 RAW="$RESULTS/raw"
 
 SERVERS=(sequential_server threaded_server threadpool_server select_server epoll_server)
 
 mkdir -p "$RAW"
 SUMMARY="$RESULTS/summary.csv"
-echo "server,connections,requests,errors,mismatches,wall_ms,throughput_rps,mean_us,p50_us,p90_us,p99_us,p999_us,max_us" > "$SUMMARY"
+echo "server,connections,established,setup_ms,connect_max_us,ack_max_us,requests,errors,mismatches,wall_ms,throughput_rps,mean_us,p50_us,p90_us,p99_us,p999_us,max_us" > "$SUMMARY"
 
 if [[ ! -x "$BUILD/loadgen" ]]; then
   echo "loadgen not built. Run: make release" >&2
@@ -103,14 +107,19 @@ for server in "${SERVERS[@]}"; do
       continue
     fi
 
-    echo "$server,$conns,$(get requests),$(get errors),$(get mismatches),$(get wall_ms),$(get throughput_rps),$(get mean_us),$(get p50_us),$(get p90_us),$(get p99_us),$(get p999_us),$(get max_us)" >> "$SUMMARY"
+    echo "$server,$conns,$(get established),$(get setup_ms),$(get connect_max_us),$(get ack_max_us),$(get requests),$(get errors),$(get mismatches),$(get wall_ms),$(get throughput_rps),$(get mean_us),$(get p50_us),$(get p90_us),$(get p99_us),$(get p999_us),$(get max_us)" >> "$SUMMARY"
 
-    printf '%-20s %5s conns  %8s rps  p50 %8s us  p99 %9s us%s\n' \
+    printf '%-20s %5s conns  %8s rps  p50 %8s us  p99 %9s us  connect_max %9s us%s\n' \
       "$server" "$conns" "$(get throughput_rps)" "$(get p50_us)" "$(get p99_us)" \
+      "$(get connect_max_us)" \
       "$([[ $rc -ne 0 ]] && echo '  [ERRORS]' || echo '')"
   done
 done
 
+# Convenience pointer for `make bench` and for plotting the newest run.
+ln -sfn "$RUN_ID" "$ROOT/results/latest"
+
 echo
 echo "Summary written to $SUMMARY"
 echo "Raw latencies in $RAW"
+echo "results/latest now points at $RUN_ID"
