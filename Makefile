@@ -14,7 +14,8 @@ LDFLAGS += -pthread
 
 # libuv installs a shared library alongside the .a, so the rpath lets the binary
 # find it at run time without setting LD_LIBRARY_PATH.
-UV_LIBS := -luv -Wl,-rpath=/usr/local/lib
+UV_LIBS   := -luv -Wl,-rpath=/usr/local/lib
+URING_LIBS := -luring
 
 SRC_DIR   := src
 BUILD_DIR := build
@@ -22,18 +23,20 @@ BUILD_DIR := build
 BENCH_DIR := bench
 
 # Shared objects every server links against.
-COMMON_SRCS := $(SRC_DIR)/utils.c $(SRC_DIR)/protocol.c
+COMMON_SRCS := $(SRC_DIR)/utils.c $(SRC_DIR)/protocol.c $(SRC_DIR)/peer_state.c
 COMMON_OBJS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(COMMON_SRCS))
 
 ALL_SRCS  := $(filter-out $(COMMON_SRCS),$(wildcard $(SRC_DIR)/*.c))
-UV_SRCS   := $(filter $(SRC_DIR)/uv_%.c,$(ALL_SRCS))
-CORE_SRCS := $(filter-out $(UV_SRCS),$(ALL_SRCS))
+UV_SRCS    := $(filter $(SRC_DIR)/uv_%.c,$(ALL_SRCS))
+URING_SRCS := $(filter $(SRC_DIR)/uring_%.c,$(ALL_SRCS))
+CORE_SRCS  := $(filter-out $(UV_SRCS) $(URING_SRCS),$(ALL_SRCS))
 
-CORE_BINS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%,$(CORE_SRCS))
-UV_BINS   := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%,$(UV_SRCS))
+CORE_BINS  := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%,$(CORE_SRCS))
+UV_BINS    := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%,$(UV_SRCS))
+URING_BINS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%,$(URING_SRCS))
 BENCH_BINS := $(BUILD_DIR)/loadgen
-DEPS      := $(CORE_BINS:=.d) $(UV_BINS:=.d) $(BENCH_BINS:=.d) \
-             $(COMMON_OBJS:.o=.d)
+DEPS := $(CORE_BINS:=.d) $(UV_BINS:=.d) $(URING_BINS:=.d) $(BENCH_BINS:=.d) \
+        $(COMMON_OBJS:.o=.d)
 
 # Without this, make treats the shared objects as intermediate files and
 # deletes them after every build, forcing a recompile of utils.c and protocol.c
@@ -46,8 +49,11 @@ all: $(CORE_BINS) $(BENCH_BINS)
 .PHONY: uv
 uv: $(UV_BINS)
 
+.PHONY: uring
+uring: $(URING_BINS)
+
 .PHONY: everything
-everything: all uv
+everything: all uv uring
 
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
@@ -62,6 +68,9 @@ $(BUILD_DIR)/loadgen: $(BENCH_DIR)/loadgen.c | $(BUILD_DIR)
 # More specific than the generic rule below, so make picks it for uv-* sources.
 $(BUILD_DIR)/uv_%: $(SRC_DIR)/uv_%.c $(COMMON_OBJS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< $(COMMON_OBJS) $(LDFLAGS) $(UV_LIBS) -o $@
+
+$(BUILD_DIR)/uring_%: $(SRC_DIR)/uring_%.c $(COMMON_OBJS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $< $(COMMON_OBJS) $(LDFLAGS) $(URING_LIBS) -o $@
 
 $(BUILD_DIR)/%: $(SRC_DIR)/%.c $(COMMON_OBJS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< $(COMMON_OBJS) $(LDFLAGS) -o $@
@@ -82,10 +91,15 @@ debug:
 		LDFLAGS="$(LDFLAGS) -fsanitize=address,undefined"
 
 # Benchmark numbers come from this target and no other.
+# Benchmark numbers come from this target and no other. io_uring is included
+# when liburing is present, since run_bench.sh sweeps it alongside the rest.
 .PHONY: release
 release:
 	$(MAKE) clean
 	$(MAKE) all CFLAGS="$(CFLAGS) -O2 -DNDEBUG"
+	@pkg-config --exists liburing 2>/dev/null \
+		&& $(MAKE) uring CFLAGS="$(CFLAGS) -O2 -DNDEBUG" \
+		|| echo "liburing not found, skipping uring_server"
 
 .PHONY: format
 format:
@@ -106,6 +120,7 @@ help:
 	@echo "Targets:"
 	@echo "  all         build the servers into $(BUILD_DIR)/ (default)"
 	@echo "  uv          build the libuv servers, needs libuv installed"
+	@echo "  uring       build the io_uring server, needs liburing installed"
 	@echo "  everything  all + uv"
 	@echo "  strict      rebuild with -Werror"
 	@echo "  debug       rebuild with ASan and UBSan, no optimisation"
@@ -116,5 +131,6 @@ help:
 	@echo ""
 	@echo "Core servers:  $(notdir $(CORE_BINS))"
 	@echo "libuv servers: $(notdir $(UV_BINS))"
+	@echo "io_uring:      $(notdir $(URING_BINS))"
 
 -include $(DEPS)
