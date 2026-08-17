@@ -29,7 +29,7 @@ RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 RESULTS="$ROOT/results/$RUN_ID"
 RAW="$RESULTS/raw"
 
-SERVERS=(sequential_server threaded_server threadpool_server select_server epoll_server)
+SERVERS=(sequential_server threaded_server threadpool_server select_server epoll_server uring_server)
 
 mkdir -p "$RAW"
 SUMMARY="$RESULTS/summary.csv"
