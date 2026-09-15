@@ -29,6 +29,7 @@ concurrency:
 env:
   PROMETHEUS_VERSION: 2.53.0
   SMOKE_SERVER: threadpool_server
+  SERVER_PORT: 9090
   METRICS_PORT: 9110
 
 jobs:
@@ -194,11 +195,22 @@ jobs:
           sudo mkdir -p /opt/promtool
           sudo cp "/tmp/${archive}/promtool" /opt/promtool/promtool
 
-      - name: Scrape the endpoint and validate the exposition format
+      - name: Scrape the endpoint and confirm the counters track real traffic
         run: |
-          "./build/${SMOKE_SERVER}" &
+          set -o pipefail
+
+          "./build/${SMOKE_SERVER}" "${SERVER_PORT}" 4 64 "${METRICS_PORT}" \
+            > /tmp/server.log 2>&1 &
           server_pid=$!
-          trap 'kill "${server_pid}" 2>/dev/null || true' EXIT
+
+          # The server log is the only evidence when a check below fails, so
+          # print it on the way out whatever the outcome.
+          cleanup() {
+            kill "${server_pid}" 2>/dev/null || true
+            echo "--- server log ---"
+            cat /tmp/server.log || true
+          }
+          trap cleanup EXIT
 
           for _ in $(seq 1 20); do
             if curl -sf "http://127.0.0.1:${METRICS_PORT}/metrics" -o /tmp/metrics.txt; then
@@ -207,8 +219,37 @@ jobs:
             sleep 0.5
           done
 
-          test -s /tmp/metrics.txt
+          if [ ! -s /tmp/metrics.txt ]; then
+            echo "no response from the metrics endpoint on port ${METRICS_PORT}" >&2
+            exit 1
+          fi
+
           /opt/promtool/promtool check metrics < /tmp/metrics.txt
           grep -q '^server_request_duration_seconds_bucket' /tmp/metrics.txt
           grep -q 'le="+Inf"' /tmp/metrics.txt
           grep -q 'model="' /tmp/metrics.txt
+
+          # An endpoint that serves zeros forever would pass every check above,
+          # so drive known traffic through the server and compare what the load
+          # generator saw with what the server reported.
+          ./build/loadgen 127.0.0.1 "${SERVER_PORT}" 16 100 32 \
+            | tee /tmp/loadgen.log
+          curl -sf "http://127.0.0.1:${METRICS_PORT}/metrics" -o /tmp/after.txt
+
+          reported() { awk -v k="$1" '$1 == k { print $2 }' /tmp/loadgen.log; }
+
+          established=$(reported established)
+          requests=$(reported requests)
+          errors=$(reported errors)
+          accepted=$(grep '^server_connections_accepted_total' /tmp/after.txt \
+            | awk '{ print $2 }')
+          observed=$(grep '^server_request_duration_seconds_count' /tmp/after.txt \
+            | awk '{ print $2 }')
+
+          echo "loadgen: established=${established} requests=${requests} errors=${errors}"
+          echo "server:  accepted=${accepted} observed=${observed}"
+
+          test "${errors}" = "0"
+          test "${requests}" -gt 0
+          test "${accepted}" -ge "${established}"
+          test "${observed}" = "${requests}"
