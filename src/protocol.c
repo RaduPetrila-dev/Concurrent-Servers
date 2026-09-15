@@ -1,5 +1,7 @@
 #include "protocol.h"
 
+#include "metrics.h"
+
 #include <errno.h>
 #include <signal.h>
 #include <stdint.h>
@@ -72,6 +74,12 @@ serve_result_t serve_connection(int sockfd) {
       return SERVE_OK;
     }
 
+    // One request is one received buffer transformed and echoed. The clock
+    // starts after recv returns, so the histogram measures service time and not
+    // the time the peer spent thinking. Two CLOCK_MONOTONIC reads per request
+    // cost tens of nanoseconds through the vDSO, against a p50 in microseconds.
+    uint64_t started_ns = metrics_now_ns();
+
     // Transform in place and send once per recv, rather than one send() syscall
     // per byte. sendbuf can never exceed the number of bytes just received, so
     // reusing recvbuf is safe and needs no bounds check.
@@ -97,5 +105,7 @@ serve_result_t serve_connection(int sockfd) {
     if (nsend > 0 && send_all(sockfd, recvbuf, nsend) < 0) {
       return classify_errno();
     }
+
+    metrics_request_observed(metrics_now_ns() - started_ns);
   }
 }
