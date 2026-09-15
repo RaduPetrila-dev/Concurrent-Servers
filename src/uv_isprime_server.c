@@ -42,6 +42,10 @@ void set_peer_sendbuf(peer_state_t* state, const char* str) {
 
 void on_alloc_buffer(uv_handle_t* handle, size_t suggested_size,
                      uv_buf_t* buf) {
+  // libuv fixes this callback signature; the handle is not needed here because
+  // every client gets the same allocation policy.
+  (void)handle;
+
   buf->base = (char*)xmalloc(suggested_size);
   buf->len = suggested_size;
 }
@@ -118,7 +122,9 @@ void on_peer_read(uv_stream_t* client, ssize_t nread, const uv_buf_t* buf) {
     // under read(2).
   } else {
     // nread > 0
-    assert(buf->len >= nread);
+    // nread is ssize_t and buf->len is size_t. The branch guarantees
+    // nread > 0, so the cast is safe and silences -Wsign-compare.
+    assert(nread > 0 && buf->len >= (size_t)nread);
     int rc;
 
     // Parse the number from client request: assume for simplicity the request
