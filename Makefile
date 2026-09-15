@@ -90,9 +90,16 @@ $(BUILD_DIR)/uring_%: $(SRC_DIR)/uring_%.c $(COMMON_OBJS) | $(BUILD_DIR)
 $(BUILD_DIR)/%: $(SRC_DIR)/%.c $(COMMON_OBJS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< $(COMMON_OBJS) $(LDFLAGS) -o $@
 
+# ThreadSanitizer maps its shadow memory at fixed addresses, so it needs ASLR
+# entropy at 28 bits or lower. It normally re-execs itself with randomisation
+# off, but a container seccomp profile that blocks personality(2) stops it and
+# the binary aborts before main. setarch does the same thing from outside, needs
+# no privileges, and is a no-op for a unit test of atomic counters.
+TEST_RUNNER ?=
+
 .PHONY: test
 test: $(TEST_BINS)
-	$(BUILD_DIR)/test_metrics
+	$(TEST_RUNNER) $(BUILD_DIR)/test_metrics
 
 # Warnings become errors. CI runs this so a warning cannot reach main.
 # libuv and io_uring are included when present, matching what release does.
@@ -140,6 +147,7 @@ test-debug:
 test-tsan:
 	$(MAKE) clean
 	$(MAKE) test \
+		TEST_RUNNER="setarch -R" \
 		CFLAGS="$(CFLAGS) -g3 -O1 -fno-omit-frame-pointer -fsanitize=thread" \
 		LDFLAGS="$(LDFLAGS) -fsanitize=thread"
 
