@@ -1,0 +1,44 @@
+name: concurrent-servers-observability
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: cs-prometheus
+    command:
+    - --config.file=/etc/prometheus/prometheus.yml
+    - --storage.tsdb.retention.time=6h
+    - --web.enable-lifecycle
+    volumes:
+    - ./prometheus:/etc/prometheus:ro
+    ports:
+    - 9091:9090
+    extra_hosts:
+    - host.docker.internal:host-gateway
+    restart: unless-stopped
+    depends_on:
+    - node-exporter
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: cs-grafana
+    depends_on:
+    - prometheus
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: 'true'
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/concurrent-servers.json
+    volumes:
+    - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+    - 3000:3000
+    restart: unless-stopped
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    container_name: cs-node-exporter
+    command:
+    - --path.procfs=/host/proc
+    - --path.sysfs=/host/sys
+    volumes:
+    - /proc:/host/proc:ro
+    - /sys:/host/sys:ro
+    restart: unless-stopped
