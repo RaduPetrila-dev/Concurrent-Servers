@@ -1,0 +1,41 @@
+groups:
+  - name: concurrent-servers
+    interval: 5s
+    rules:
+      - alert: ConnectionsBeingRefused
+        expr: sum by (model) (rate(server_connections_refused_total[15s])) > 0
+        for: 15s
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.model }} is refusing connections"
+          description: >-
+            Refusing {{ printf "%.1f" $value }} connections per second.
+            Accept queue or worker pool is saturated, so a flat median is an
+            artefact of load the server never served.
+
+      - alert: PoolQueueSaturated
+        expr: server_pool_queue_depth >= 64
+        for: 10s
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.model }} work queue is full"
+          description: >-
+            Queue depth has sat at its 64-slot ceiling for 10s. New work is
+            being rejected rather than queued.
+
+      - alert: TailLatencyAboveTarget
+        expr: >-
+          histogram_quantile(
+            0.99,
+            sum by (le, model) (rate(server_request_duration_seconds_bucket[30s]))
+          ) > 0.001
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.model }} p99 above 1ms"
+          description: >-
+            p99 request service time is {{ printf "%.6f" $value }}s against a
+            1ms target.
