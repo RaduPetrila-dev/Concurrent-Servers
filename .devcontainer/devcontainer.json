@@ -1,7 +1,24 @@
 {
   "name": "Concurrent-Servers",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
-  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y build-essential clang-format libuv1-dev python3-matplotlib netcat-openbsd",
+
+  "runArgs": [
+    // ThreadSanitizer lowers ASLR entropy through personality(2) before it maps
+    // its shadow memory. The default seccomp profile denies the syscall, so
+    // every TSan binary aborts before main and setarch cannot help either.
+    "--security-opt", "seccomp=unconfined",
+
+    // tcpdump in tools/capture_stall.sh opens a raw socket on the loopback
+    // interface to record the SYN retransmits behind the 1.02s connect stall.
+    "--cap-add=NET_RAW",
+    "--cap-add=NET_ADMIN"
+  ],
+
+  // One apt-get, so nothing races the lock afterwards. clang matches the second
+  // leg of the CI compiler matrix, liburing-dev builds uring_server, shellcheck
+  // and tcpdump cover the observability job and the capture script.
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y build-essential clang clang-format libuv1-dev liburing-dev shellcheck tcpdump python3-matplotlib netcat-openbsd",
+
   "customizations": {
     "vscode": {
       "extensions": ["ms-vscode.cpptools", "xaver.clang-format"]
