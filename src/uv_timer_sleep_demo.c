@@ -9,6 +9,9 @@
 #include <uv.h>
 
 void on_timer(uv_timer_t* timer) {
+  // Fixed callback signature; the timer handle is not needed here.
+  (void)timer;
+
   uint64_t timestamp = uv_hrtime();
   printf("on_timer [%" PRIu64 " ms]\n", (timestamp / 1000000) % 100000);
 
@@ -19,7 +22,7 @@ void on_timer(uv_timer_t* timer) {
   }
 }
 
-int main(int argc, const char** argv) {
+int main(void) {
   uv_timer_t timer;
   uv_timer_init(uv_default_loop(), &timer);
   uv_timer_start(&timer, on_timer, 0, 1000);
