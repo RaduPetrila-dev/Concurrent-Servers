@@ -11,7 +11,7 @@
  * scraped into one dashboard.
  */
 
-void metrics_init(const char *model);
+void metrics_init(const char* model);
 
 void metrics_connection_accepted(void);
 void metrics_connection_refused(void);
@@ -26,7 +26,7 @@ void metrics_workers_busy_add(int64_t delta);
  * Writes the exposition body into out. Returns the length the body would have
  * had, so a return value >= cap means the output was truncated.
  */
-size_t metrics_render(char *out, size_t cap);
+size_t metrics_render(char* out, size_t cap);
 
 uint64_t metrics_now_ns(void);
 
