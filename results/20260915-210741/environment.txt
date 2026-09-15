@@ -1,0 +1,9 @@
+date         2026-09-15T21:07:41+00:00
+kernel       Linux 6.8.0-1064-azure
+cores        2
+cpu          INTEL(R) XEON(R) PLATINUM 8573C
+cgroup_cpu   max 100000
+memory       7.8Gi
+ulimit_n     8192
+messages     200
+payload      32
