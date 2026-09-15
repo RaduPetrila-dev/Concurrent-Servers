@@ -103,7 +103,9 @@ for server in "${SERVERS[@]}"; do
 
     if [[ -z "$(get requests)" ]]; then
       echo "$server @ $conns conns: FAILED"
-      echo "$out" | sed 's/^/    /'
+      while IFS= read -r line; do
+        printf '    %s\n' "$line"
+      done <<< "$out"
       continue
     fi
 
