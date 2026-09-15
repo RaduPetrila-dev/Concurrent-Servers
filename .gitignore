@@ -1,61 +1,54 @@
 # Build output
 build/
 *.o
-*.d
 *.a
 *.so
-*.out
-a.out
+*.d
 
-# Binaries built in place by mistake
-sequential_server
-threaded_server
-threadpool_server
-epoll_server
-select_server
-uv_server
-blocking_listener
-nonblocking_listener
-threadspammer
-loadgen
+# Server and tool binaries when built into the repo root
+/sequential_server
+/threaded_server
+/threadpool_server
+/select_server
+/epoll_server
+/uring_server
+/blocking_listener
+/nonblocking_listener
+/threadspammer
+/uv_server
+/loadgen
+/test_metrics
 
-# Benchmark raw latency dumps. Regenerable from bench/run_bench.sh, and large:
-# one line per request, so a 1024-connection sweep runs to tens of megabytes.
-# summary.csv, environment.txt and the plots are committed.
-results/*/raw/
-
-# Debug and profiling
+# Sanitizer and debug output
+*.dSYM/
 core
 core.*
 vgcore.*
-perf.data
-perf.data.old
-callgrind.out.*
-massif.out.*
-*.gcda
-*.gcno
-*.gcov
+*.log
 
-# Tooling
-compile_commands.json
-.cache/
-.clangd/
+# Capture artefacts from tools/capture_stall.sh
+artefacts/
+*.pcap
+*.pcapng
 
-# Python (benchmark plotting)
+# Benchmark output
+bench/results/
+*.csv
+*.png
+*.svg
+
+# Local Prometheus and Grafana state
+deploy/data/
+deploy/**/data/
+
+# Python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
-.ipynb_checkpoints/
 
-# Editors
-.vscode/
+# Editors and OS
 .idea/
 *.swp
 *.swo
-*~
-
-# OS
 .DS_Store
-Thumbs.db
-results/latest
