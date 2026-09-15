@@ -100,12 +100,16 @@ test: $(TEST_BINS)
 strict:
 	$(MAKE) clean
 	$(MAKE) all CFLAGS="$(CFLAGS) -Werror"
-	@pkg-config --exists libuv 2>/dev/null \
-		&& $(MAKE) uv CFLAGS="$(CFLAGS) -Werror" \
-		|| echo "libuv not found, skipping uv servers"
-	@pkg-config --exists liburing 2>/dev/null \
-		&& $(MAKE) uring CFLAGS="$(CFLAGS) -Werror" \
-		|| echo "liburing not found, skipping uring_server"
+	@if pkg-config --exists libuv 2>/dev/null; then \
+		$(MAKE) uv CFLAGS="$(CFLAGS) -Werror"; \
+	else \
+		echo "libuv not found, skipping uv servers"; \
+	fi
+	@if pkg-config --exists liburing 2>/dev/null; then \
+		$(MAKE) uring CFLAGS="$(CFLAGS) -Werror"; \
+	else \
+		echo "liburing not found, skipping uring_server"; \
+	fi
 
 # ASan and UBSan. Slow, and it catches the memory bugs a socket server hides
 # until it is under load.
@@ -145,9 +149,11 @@ test-tsan:
 release:
 	$(MAKE) clean
 	$(MAKE) all CFLAGS="$(CFLAGS) -O2 -DNDEBUG"
-	@pkg-config --exists liburing 2>/dev/null \
-		&& $(MAKE) uring CFLAGS="$(CFLAGS) -O2 -DNDEBUG" \
-		|| echo "liburing not found, skipping uring_server"
+	@if pkg-config --exists liburing 2>/dev/null; then \
+		$(MAKE) uring CFLAGS="$(CFLAGS) -O2 -DNDEBUG"; \
+	else \
+		echo "liburing not found, skipping uring_server"; \
+	fi
 
 .PHONY: format
 format:
