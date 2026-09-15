@@ -1,36 +1,214 @@
-name: build
+##
+## Targets used here all exist in the Makefile:
+##   format-check  clang-format over src/, bench/ and tests/, fails on drift
+##   strict        clean rebuild with -Werror, plus uv and uring when present
+##   debug         clean rebuild under ASan and UBSan
+##   tsan          clean rebuild under ThreadSanitizer
+##   test          build and run the metrics unit tests
+##   test-debug    metrics tests under ASan and UBSan
+##   test-tsan     metrics tests under ThreadSanitizer
+##   release       clean -O2 rebuild, what the smoke test exercises
+##
+
+name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROMETHEUS_VERSION: 2.53.0
+  SMOKE_SERVER: threadpool_server
+  METRICS_PORT: 9110
 
 jobs:
-  strict:
-    name: Build with -Werror
-    runs-on: ubuntu-latest
+  format:
+    name: clang-format
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Build
-        run: make strict
-      - name: List binaries
-        run: ls -l build/
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-format
+
+      - name: Check formatting
+        run: make format-check
+
+  build:
+    name: strict build (${{ matrix.cc }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang pkg-config libuv1-dev liburing-dev
+
+      - name: Build everything with -Werror
+        run: make strict CC=${{ matrix.cc }}
+
+      - name: Confirm the metrics objects linked into a server
+        run: |
+          test -f build/metrics.o
+          test -f build/metrics_server.o
+          test ! -f build/metrics
+          test ! -f build/metrics_server
 
   sanitizers:
-    name: Build with ASan and UBSan
-    runs-on: ubuntu-latest
+    name: sanitizers (${{ matrix.label }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: address and undefined
+            build: debug
+            test: test-debug
+          - label: thread
+            build: tsan
+            test: test-tsan
     steps:
       - uses: actions/checkout@v4
-      - name: Build
-        run: make debug
 
-  format:
-    name: Check formatting
-    runs-on: ubuntu-latest
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libuv1-dev liburing-dev
+
+      - name: Build servers under ${{ matrix.label }}
+        run: make ${{ matrix.build }}
+
+      - name: Metrics tests under ${{ matrix.label }}
+        run: make ${{ matrix.test }}
+
+  unit-tests:
+    name: unit tests
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install clang-format
-        run: sudo apt-get update && sudo apt-get install -y clang-format
-      - name: Check src/ against .clang-format
-        run: clang-format --style=file --dry-run --Werror src/*.c src/*.h
+
+      - name: Run the metrics unit tests
+        run: make test
+
+  observability:
+    name: observability config
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: Shellcheck scripts
+        run: shellcheck tools/capture_stall.sh bench/run_bench.sh
+
+      - name: Parse every config file
+        run: |
+          python3 -c "
+          import json, pathlib, yaml
+          for path in sorted(pathlib.Path('deploy').rglob('*.yml')):
+              yaml.safe_load(path.read_text())
+              print('ok', path)
+          for path in sorted(pathlib.Path('deploy').rglob('*.json')):
+              json.loads(path.read_text())
+              print('ok', path)
+          "
+
+      - name: Cache promtool
+        id: cache-promtool
+        uses: actions/cache@v4
+        with:
+          path: /opt/promtool
+          key: promtool-${{ env.PROMETHEUS_VERSION }}
+
+      - name: Install promtool
+        if: steps.cache-promtool.outputs.cache-hit != 'true'
+        run: |
+          archive="prometheus-${PROMETHEUS_VERSION}.linux-amd64"
+          curl -sSfL -o /tmp/prometheus.tar.gz \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${archive}.tar.gz"
+          tar xzf /tmp/prometheus.tar.gz -C /tmp
+          sudo mkdir -p /opt/promtool
+          sudo cp "/tmp/${archive}/promtool" /opt/promtool/promtool
+
+      - name: Check alerting rules
+        run: /opt/promtool/promtool check rules deploy/prometheus/alerts.yml
+
+      - name: Check dashboard queries
+        run: |
+          python3 tools/check_dashboard_queries.py \
+            deploy/grafana/dashboards/*.json -o /tmp/dashboard_queries.yml
+          /opt/promtool/promtool check rules /tmp/dashboard_queries.yml
+
+  smoke:
+    name: metrics endpoint smoke test
+    runs-on: ubuntu-24.04
+    needs: [unit-tests]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libuv1-dev liburing-dev
+
+      - name: Release build
+        run: make release
+
+      - name: Cache promtool
+        id: cache-promtool
+        uses: actions/cache@v4
+        with:
+          path: /opt/promtool
+          key: promtool-${{ env.PROMETHEUS_VERSION }}
+
+      - name: Install promtool
+        if: steps.cache-promtool.outputs.cache-hit != 'true'
+        run: |
+          archive="prometheus-${PROMETHEUS_VERSION}.linux-amd64"
+          curl -sSfL -o /tmp/prometheus.tar.gz \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${archive}.tar.gz"
+          tar xzf /tmp/prometheus.tar.gz -C /tmp
+          sudo mkdir -p /opt/promtool
+          sudo cp "/tmp/${archive}/promtool" /opt/promtool/promtool
+
+      - name: Scrape the endpoint and validate the exposition format
+        run: |
+          "./build/${SMOKE_SERVER}" &
+          server_pid=$!
+          trap 'kill "${server_pid}" 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 20); do
+            if curl -sf "http://127.0.0.1:${METRICS_PORT}/metrics" -o /tmp/metrics.txt; then
+              break
+            fi
+            sleep 0.5
+          done
+
+          test -s /tmp/metrics.txt
+          /opt/promtool/promtool check metrics < /tmp/metrics.txt
+          grep -q '^server_request_duration_seconds_bucket' /tmp/metrics.txt
+          grep -q 'le="+Inf"' /tmp/metrics.txt
+          grep -q 'model="' /tmp/metrics.txt
