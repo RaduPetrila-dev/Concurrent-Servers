@@ -90,16 +90,9 @@ $(BUILD_DIR)/uring_%: $(SRC_DIR)/uring_%.c $(COMMON_OBJS) | $(BUILD_DIR)
 $(BUILD_DIR)/%: $(SRC_DIR)/%.c $(COMMON_OBJS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< $(COMMON_OBJS) $(LDFLAGS) -o $@
 
-# ThreadSanitizer maps its shadow memory at fixed addresses, so it needs ASLR
-# entropy at 28 bits or lower. It normally re-execs itself with randomisation
-# off, but a container seccomp profile that blocks personality(2) stops it and
-# the binary aborts before main. setarch does the same thing from outside, needs
-# no privileges, and is a no-op for a unit test of atomic counters.
-TEST_RUNNER ?=
-
 .PHONY: test
 test: $(TEST_BINS)
-	$(TEST_RUNNER) $(BUILD_DIR)/test_metrics
+	$(BUILD_DIR)/test_metrics
 
 # Warnings become errors. CI runs this so a warning cannot reach main.
 # libuv and io_uring are included when present, matching what release does.
@@ -143,13 +136,36 @@ test-debug:
 		CFLAGS="$(CFLAGS) -g3 -O0 -fno-omit-frame-pointer -fsanitize=address,undefined" \
 		LDFLAGS="$(LDFLAGS) -fsanitize=address,undefined"
 
+# ThreadSanitizer maps its shadow memory at fixed addresses and needs ASLR
+# entropy at 28 bits or lower. Ubuntu ships 32. TSan handles that itself by
+# re-execing with randomisation off through personality(2), which is why this is
+# invisible on a plain VM and on the CI runner. A container that blocks the
+# syscall in its seccomp profile stops both TSan and setarch, and the binary
+# aborts before main.
+#
+# So: use setarch when the sandbox allows it, run direct when the kernel entropy
+# is already low enough, and fail with the remedy when neither holds. Skipping
+# the test would be worse than failing it.
 .PHONY: test-tsan
 test-tsan:
 	$(MAKE) clean
-	$(MAKE) test \
-		TEST_RUNNER="setarch -R" \
+	$(MAKE) $(TEST_BINS) \
 		CFLAGS="$(CFLAGS) -g3 -O1 -fno-omit-frame-pointer -fsanitize=thread" \
 		LDFLAGS="$(LDFLAGS) -fsanitize=thread"
+	@if setarch -R true >/dev/null 2>&1; then \
+		echo "setarch -R $(BUILD_DIR)/test_metrics"; \
+		setarch -R $(BUILD_DIR)/test_metrics; \
+	elif [ "$$(cat /proc/sys/vm/mmap_rnd_bits 2>/dev/null || echo 28)" -le 28 ]; then \
+		echo "$(BUILD_DIR)/test_metrics"; \
+		$(BUILD_DIR)/test_metrics; \
+	else \
+		echo "ThreadSanitizer needs ASLR entropy at 28 bits or lower." >&2; \
+		echo "This environment reports $$(cat /proc/sys/vm/mmap_rnd_bits) and blocks personality(2)," >&2; \
+		echo "so neither TSan nor setarch can lower it. Either run:" >&2; \
+		echo "    sudo sysctl -w vm.mmap_rnd_bits=28" >&2; \
+		echo "or rebuild the container with --security-opt seccomp=unconfined." >&2; \
+		exit 1; \
+	fi
 
 # Benchmark numbers come from this target and no other. io_uring is included
 # when liburing is present, since run_bench.sh sweeps it alongside the rest.
