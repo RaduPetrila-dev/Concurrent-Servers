@@ -156,6 +156,9 @@ jobs:
       - name: Check alerting rules
         run: /opt/promtool/promtool check rules deploy/prometheus/alerts.yml
 
+      - name: Unit-test the alerting rules
+        run: /opt/promtool/promtool test rules deploy/prometheus/alerts_test.yml
+
       - name: Check dashboard queries
         run: |
           python3 tools/check_dashboard_queries.py \
