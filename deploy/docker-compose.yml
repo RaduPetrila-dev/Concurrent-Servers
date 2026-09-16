@@ -35,6 +35,13 @@ services:
   node-exporter:
     image: prom/node-exporter:v1.8.1
     container_name: cs-node-exporter
+    # /proc/net resolves through the process reading it, so a node-exporter in
+    # its own network namespace reports its own idle TCP counters, all zero.
+    # Sharing the host namespaces makes ListenOverflows, ListenDrops and
+    # TCPSynRetrans the counters of the namespace the servers run in. Under
+    # docker-in-docker, host means the Codespace container itself.
+    network_mode: host
+    pid: host
     command:
     - --path.procfs=/host/proc
     - --path.sysfs=/host/sys
