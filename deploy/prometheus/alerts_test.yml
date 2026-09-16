@@ -1,0 +1,31 @@
+# Replays the shape of the September overload run. The kernel's
+# ListenOverflows counter climbs while the server's refusal counter stays at
+# zero, which is what 44,498 overflows against a refusal count of 0 looked
+# like. ConnectionsBeingRefused staying silent here is the blind spot, and
+# KernelDroppingConnections firing is the fix.
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 5s
+
+tests:
+  - interval: 1s
+    input_series:
+      - series: 'server_connections_refused_total{job="concurrent-servers", instance="host.docker.internal:9110", model="threadpool"}'
+        values: '0x120'
+      - series: 'node_netstat_TcpExt_ListenOverflows{job="node", instance="host.docker.internal:9100"}'
+        values: '0+100x120'
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: ConnectionsBeingRefused
+        exp_alerts: []
+      - eval_time: 60s
+        alertname: KernelDroppingConnections
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: node
+              instance: host.docker.internal:9100
+            exp_annotations:
+              summary: "Kernel is dropping connections before accept()"
+              description: "100.0 listen queue overflows per second on host.docker.internal:9100. The accept backlog is full, so these connections never reach the server and server_connections_refused_total stays at zero."
