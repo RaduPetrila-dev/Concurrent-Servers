@@ -10,9 +10,22 @@ groups:
         annotations:
           summary: "{{ $labels.model }} is refusing connections"
           description: >-
-            Refusing {{ printf "%.1f" $value }} connections per second.
-            Accept queue or worker pool is saturated, so a flat median is an
-            artefact of load the server never served.
+            accept() is failing {{ printf "%.1f" $value }} times per second for
+            lack of descriptors or memory. A full accept backlog never reaches
+            this counter, so read it alongside KernelDroppingConnections.
+
+      - alert: KernelDroppingConnections
+        expr: rate(node_netstat_TcpExt_ListenOverflows[15s]) > 0
+        for: 15s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kernel is dropping connections before accept()"
+          description: >-
+            {{ printf "%.1f" $value }} listen queue overflows per second on
+            {{ $labels.instance }}. The accept backlog is full, so these
+            connections never reach the server and
+            server_connections_refused_total stays at zero.
 
       - alert: PoolQueueSaturated
         expr: server_pool_queue_depth >= 64
