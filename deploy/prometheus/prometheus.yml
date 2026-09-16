@@ -15,7 +15,9 @@ scrape_configs:
           - host.docker.internal:9110
 
   # The kernel. Connections dropped before accept() ever saw them.
+  # node-exporter shares the host network namespace, so it sits behind the
+  # same gateway as the server rather than on the compose network.
   - job_name: node
     static_configs:
       - targets:
-          - node-exporter:9100
+          - host.docker.internal:9100
